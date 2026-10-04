@@ -3,3 +3,5 @@ obj/
 /packages/
 riderModule.iml
 /_ReSharper.Caches/
+# Lab 1 generated input (about 400 MB)
+lab1/data/
