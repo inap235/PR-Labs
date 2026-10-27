@@ -71,9 +71,9 @@ Writes `lab1\results\summary.csv`: for each configuration, the median time, the 
 ### Optional experiments
 
 ```
-Labs.exe lab1 1c --workers 8 --batch 1            # question 9: batches of a single line
-Labs.exe lab1 1c --workers 8 --capacity 0         # question 9: a queue with no size limit
-Labs.exe lab1 1a --threads 64 --buffer-kb 64      # question 6: smaller buffer per thread
+.\bin\Release\net9.0\Labs.exe lab1 1c --workers 8 --batch 1
+.\bin\Release\net9.0\Labs.exe lab1 1c --workers 8 --capacity 0
+.\bin\Release\net9.0\Labs.exe lab1 1a --threads 64 --buffer-kb 64
 ```
 
 ## CSV columns
