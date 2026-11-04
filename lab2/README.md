@@ -27,13 +27,30 @@ javac -d lab2/client-java/out lab2/client-java/src/coffeeshop/*.java
 
 ## Run
 
-Server:
+All commands run from the repository root. Stop the server with `Ctrl+C`.
+
+Server, with one worker per logical processor:
 
 ```
 dotnet run -c Release -- lab2 server --port 5000
 ```
 
-or, after the build, `bin\Release\net9.0\Labs.exe lab2 server --port 5000`.
+Server with other options:
+
+```
+dotnet run -c Release -- lab2 server --port 5000 --workers 1
+dotnet run -c Release -- lab2 server --port 5000 --workers 2
+dotnet run -c Release -- lab2 server --port 5000 --workers 8
+dotnet run -c Release -- lab2 server --port 6000
+dotnet run -c Release -- lab2 server --port 5000 --bind 127.0.0.1
+dotnet run -c Release -- lab2 server --port 5000 --workers 2 --stock lab2/data/demo.json
+```
+
+After the build, the same options also work with `bin\Release\net9.0\Labs.exe`:
+
+```
+bin\Release\net9.0\Labs.exe lab2 server --port 5000 --workers 2
+```
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -46,12 +63,20 @@ At start the server prints the addresses other computers can connect to, the num
 and the stock. Then it writes one log line for every connection, order (accepted, refused, ready,
 cancelled), delivery, alert and error, with the endpoint of the client.
 
-Client and provider, each in its own terminal:
+Client, in its own terminal. Run the same command in more terminals for more clients: each one is
+a separate connection.
 
 ```
 java -cp lab2/client-java/out coffeeshop.ShopClient --host 127.0.0.1 --port 5000 --role client
+```
+
+Provider, in its own terminal. Only one can be connected at a time:
+
+```
 java -cp lab2/client-java/out coffeeshop.ShopClient --host 127.0.0.1 --port 5000 --role provider
 ```
+
+`--port` must match the port of the server.
 
 Commands are typed as in the protocol (`help` lists them):
 
@@ -68,7 +93,19 @@ while you are typing. `Ctrl+Z` then Enter (Windows) or `Ctrl+D` (Linux, macOS) a
 ## Saved stock
 
 The server saves the stock to `lab2/data/stock.json` after every change and loads it when it
-starts. Delete the file to start with a new random stock (10 to 50 of each product).
+starts. To change the file, stop the server first.
+
+New random stock (10 to 50 of each product):
+
+```
+Remove-Item lab2/data/stock.json
+```
+
+A small stock, to reach the low-stock alert quickly:
+
+```
+Set-Content lab2/data/stock.json '{"coffee": 6, "tea": 6, "croissant": 6}'
+```
 
 ## Two computers in the same network
 
@@ -76,25 +113,77 @@ starts. Delete the file to start with a new random stock (10 to 50 of each produ
    `other computers connect to 172.18.0.75:5000 (Wi-Fi)`.
 2. The first time, Windows asks whether `Labs.exe` may use the network: allow it for private
    networks. Without that prompt, add an inbound firewall rule for TCP port 5000.
-3. On the other computer: `java -cp lab2/client-java/out coffeeshop.ShopClient --host 172.18.0.75 --port 5000`.
+3. On the other computer, with the address from step 1:
 
+```
+java -cp lab2/client-java/out coffeeshop.ShopClient --host 172.18.0.75 --port 5000 --role client
+java -cp lab2/client-java/out coffeeshop.ShopClient --host 172.18.0.75 --port 5000 --role provider
+```
 
 ## Showing the tasks
 
-**Task 1.** Start the server and one client. `MENU`, then `ORDER croissant 2 tea 1`: `ACCEPTED`
-comes at once, `READY` 7 s later. `ORDER coffee 999` is refused with how many are left;
-`ORDER muffin 1`, `ORDER tea -1` and `FOO` get an error.
+### Task 1: one client
 
-**Task 2.** Start the server with `--workers 2` and three clients. Order from all three at once:
-two orders start, the third waits (the server log shows `started by worker` and how many wait).
-A waiting client can still ask for `MENU` or order again.
+```
+dotnet run -c Release -- lab2 server --port 5000
+java -cp lab2/client-java/out coffeeshop.ShopClient --host 127.0.0.1 --port 5000 --role client
+```
 
-**Task 3.** Start a provider. Order until a product falls below 5: the provider gets `ALERT` at
-once. `DELIVER croissant 20` adds to the stock; the same command from a client gets an error.
-Stop the provider, make another product fall below 5, start the provider again: it gets the alert
-when it connects.
+Type in the client: `MENU`, then `ORDER croissant 2 tea 1`: `ACCEPTED` comes at once, `READY` 7 s
+later. `ORDER coffee 9999` is refused with how many are left. `ORDER muffin 1`, `ORDER tea -1` and
+`FOO` get an error.
 
-**Task 4.** With one long order preparing and one waiting (`--workers 1`), close the client
-window or kill it in the Task Manager: the server logs that both orders are cancelled and the
-products go back to the stock. For a lost network, turn off the Wi-Fi of the client computer:
-the server notices after about 16 s. Stop the server: the client and the provider say so and end.
+### Task 2: many clients
+
+Server with 2 workers, then the client command in three terminals:
+
+```
+dotnet run -c Release -- lab2 server --port 5000 --workers 2
+java -cp lab2/client-java/out coffeeshop.ShopClient --host 127.0.0.1 --port 5000 --role client
+```
+
+Type `ORDER coffee 2` in all three: two orders start, the third waits (the server log shows
+`started by worker` and how many wait). A waiting client can still ask for `MENU` or order again.
+
+### Task 3: the provider
+
+With the server stopped, make the stock small, then start the server, a client and a provider:
+
+```
+Set-Content lab2/data/stock.json '{"coffee": 6, "tea": 6, "croissant": 6}'
+dotnet run -c Release -- lab2 server --port 5000
+java -cp lab2/client-java/out coffeeshop.ShopClient --host 127.0.0.1 --port 5000 --role client
+java -cp lab2/client-java/out coffeeshop.ShopClient --host 127.0.0.1 --port 5000 --role provider
+```
+
+- Client: `ORDER croissant 2`. The provider gets `ALERT croissant 4` at once.
+- Provider: `DELIVER croissant 20` adds to the stock. The same command from the client gets an error.
+- Provider: `QUIT`. Client: `ORDER tea 2`. Start the provider again: it gets `ALERT tea 4` when it connects.
+
+### Task 4: when things go wrong
+
+Server with 1 worker, then the client command in two terminals:
+
+```
+dotnet run -c Release -- lab2 server --port 5000 --workers 1
+java -cp lab2/client-java/out coffeeshop.ShopClient --host 127.0.0.1 --port 5000 --role client
+```
+
+- First client: `ORDER coffee 2`, then `ORDER tea 1` (this one waits).
+- Second client: `ORDER croissant 1` (it waits too).
+- Close the terminal of the first client: the server logs that both of its orders are cancelled
+  and the products are back in the stock, and the second client's order starts at once.
+- Lost network: with a client on another computer, turn off its Wi-Fi. The server notices after
+  about 16 s.
+- Stop the server with `Ctrl+C`: the client and the provider say so and end.
+
+Random bytes, from PowerShell, while the server runs (the server logs the errors and goes on):
+
+```
+$s = [System.Net.Sockets.Socket]::new('InterNetwork', 'Stream', 'Tcp'); $s.Connect('127.0.0.1', 5000); $b = [byte[]]::new(5000); [Random]::new().NextBytes($b); [void]$s.Send($b); $s.Close()
+```
+
+### Bonus: the stock survives a restart
+
+In a client, `ORDER tea 1`, then `MENU`. Stop the server with `Ctrl+C` and start it again with the
+same command. Connect a client again: `MENU` shows the same stock.
