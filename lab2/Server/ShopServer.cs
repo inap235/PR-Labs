@@ -53,9 +53,11 @@ public sealed class ShopServer(IPAddress bind, int port, Stock stock, int worker
                     IsBackground = true
                 }.Start();
             }
-            catch (Exception e) when (e is SocketException or ObjectDisposedException)
+            catch (Exception e)
             {
-                Log.Write("server", $"error: connection lost before it was served ({e.Message})");
+                // the connection is lost, or no new thread can start (too many clients):
+                // only this client is refused, the others go on
+                Log.Write("server", $"error: could not serve a new connection ({e.GetType().Name}: {e.Message})");
                 socket.Close();
             }
         }

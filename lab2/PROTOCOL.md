@@ -26,7 +26,8 @@ A new connection is a **client**. To be the **provider**, its first message is `
 | `HELLO client` | `OK client` | optional; only as the first message |
 | `HELLO provider` | `OK provider` | only as the first message; only one provider at a time, a second one gets `ERROR provider already connected` and stays a client |
 
-`HELLO` after the first message gets `ERROR HELLO only as the first message`.
+`HELLO` after the first message gets `ERROR HELLO only as the first message`. A `HELLO` that was
+refused does not count as the first message, so it may be sent again.
 
 ## Products
 

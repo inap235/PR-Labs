@@ -77,7 +77,8 @@ public sealed class Stock
             after = (int[])_counts.Clone();
             for (int p = 0; p < _counts.Length; p++)
             {
-                if (_counts[p] + delivered[p] > Max)
+                // only the delivered products: long, so a huge saved count cannot overflow
+                if (delivered[p] > 0 && (long)_counts[p] + delivered[p] > Max)
                     return false;
             }
             for (int p = 0; p < _counts.Length; p++)
@@ -118,14 +119,17 @@ public sealed class Stock
         }
     }
 
-    /// The file holds { "coffee": 43, "tea": 12, "croissant": 50 }. Null if missing or invalid.
+    /// The file holds { "coffee": 43, "tea": 12, "croissant": 50 }. Null if missing or invalid;
+    /// an invalid file is kept as .bad. If it cannot be read (locked, no permission) the exception
+    /// goes up and the server does not start: the saved stock may be fine, so it is not replaced.
     private static int[]? Read(string file)
     {
         if (!File.Exists(file))
             return null;
+        string text = File.ReadAllText(file);
         try
         {
-            var json = JsonSerializer.Deserialize<Dictionary<string, int>>(File.ReadAllText(file))
+            var json = JsonSerializer.Deserialize<Dictionary<string, int>>(text)
                        ?? throw new FormatException("the file is empty");
             var counts = new int[Products.Count];
             Array.Fill(counts, -1);
@@ -134,7 +138,8 @@ public sealed class Stock
                 int product = Products.Find(name);
                 if (product < 0)
                     throw new FormatException($"unknown product '{name}'");
-                if (count is < 0 or > Max)
+                // not checked against Max: a returned order may bring a product above it
+                if (count < 0)
                     throw new FormatException($"bad count {count} for {name}");
                 counts[product] = count;
             }
@@ -142,9 +147,10 @@ public sealed class Stock
                 throw new FormatException("every product needs a count");
             return counts;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or FormatException or JsonException)
+        catch (Exception e) when (e is FormatException or JsonException)
         {
-            Log.Write("server", $"error: cannot read {file} ({e.Message}), starting with a random stock");
+            File.Move(file, file + ".bad", overwrite: true);
+            Log.Write("server", $"error: invalid {file} ({e.Message}), kept as {file}.bad, starting with a random stock");
             return null;
         }
     }

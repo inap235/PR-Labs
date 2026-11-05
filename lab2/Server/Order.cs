@@ -8,7 +8,7 @@ public sealed class Order(int id, int[] quantities, int seconds, Connection clie
     public int Seconds { get; } = seconds;
     public Connection Client { get; } = client;
 
-    /// Set after ACCEPTED is sent; the worker waits for it before starting.
+    /// Set after ACCEPTED is sent; the worker waits for it before sending READY.
     public ManualResetEventSlim Announced { get; } = new();
 
     /// Set by Kitchen.Cancel when the client leaves during preparation.

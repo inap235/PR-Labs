@@ -27,7 +27,7 @@ public static class Lab2
                     return 1;
             }
         }
-        catch (Exception e) when (e is ArgumentException or FormatException or SocketException)
+        catch (Exception e) when (e is ArgumentException or FormatException or SocketException or IOException or UnauthorizedAccessException)
         {
             Console.Error.WriteLine($"Error: {e.Message}");
             return 2;

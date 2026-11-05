@@ -73,10 +73,12 @@ public sealed class Session(ShopServer shop, Connection connection)
         if (words.Length == 0)
             return true;
 
+        string command = words[0].ToUpperInvariant();
         bool first = _firstMessage;
-        _firstMessage = false;
+        if (command != "HELLO")
+            _firstMessage = false; // a refused HELLO may be sent again, so Hello decides for itself
 
-        switch (words[0].ToUpperInvariant())
+        switch (command)
         {
             case "HELLO": Hello(words, first); break;
             case "MENU": Menu(words); break;
@@ -109,7 +111,10 @@ public sealed class Session(ShopServer shop, Connection connection)
         }
         switch (words[1].ToLowerInvariant())
         {
-            case "client": Reply("OK client"); break;
+            case "client":
+                _firstMessage = false;
+                Reply("OK client");
+                break;
             case "provider": BecomeProvider(); break;
             default: Error($"unknown role '{words[1]}'"); break;
         }
@@ -122,6 +127,7 @@ public sealed class Session(ShopServer shop, Connection connection)
             Error("provider already connected");
             return;
         }
+        _firstMessage = false;
         _isProvider = true;
         Log.Write(connection.Endpoint, "is the provider");
 
@@ -186,9 +192,15 @@ public sealed class Session(ShopServer shop, Connection connection)
         }
 
         var order = shop.Kitchen.Add(wanted, connection);
-        Reply($"ACCEPTED {order.Id} {order.Seconds}");
-        Log.Write(connection.Endpoint, $"order {order.Id} accepted: {Protocol.Items(wanted, skipZero: true)}, {order.Seconds} s");
-        order.Announced.Set(); // only now may a worker start it and later send READY
+        try
+        {
+            Reply($"ACCEPTED {order.Id} {order.Seconds}");
+            Log.Write(connection.Endpoint, $"order {order.Id} accepted: {Protocol.Items(wanted, skipZero: true)}, {order.Seconds} s");
+        }
+        finally
+        {
+            order.Announced.Set(); // only now may the worker send READY; always set, so it never hangs
+        }
 
         // this thread made the stock fall, so it tells the provider
         for (int p = 0; p < Products.Count; p++)

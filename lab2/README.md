@@ -70,7 +70,7 @@ a separate connection.
 java -cp lab2/client-java/out coffeeshop.ShopClient --host 127.0.0.1 --port 5000 --role client
 ```
 
-Provider, in its own terminal. Only one can be connected at a time:
+Provider, in its own terminal. Only one can be connected at a time; a second one says so and ends:
 
 ```
 java -cp lab2/client-java/out coffeeshop.ShopClient --host 127.0.0.1 --port 5000 --role provider
@@ -93,7 +93,9 @@ while you are typing. `Ctrl+Z` then Enter (Windows) or `Ctrl+D` (Linux, macOS) a
 ## Saved stock
 
 The server saves the stock to `lab2/data/stock.json` after every change and loads it when it
-starts. To change the file, stop the server first.
+starts. To change the file, stop the server first. An invalid file is kept as `stock.json.bad` and
+the server starts with a random stock. A file that cannot be read (for example locked by another
+program) stops the server with an error, so the saved stock is not replaced.
 
 New random stock (10 to 50 of each product):
 

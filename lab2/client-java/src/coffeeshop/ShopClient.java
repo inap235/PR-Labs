@@ -46,7 +46,8 @@ public final class ShopClient {
         }
         System.out.println("Connected to " + host + ":" + port + " as " + role + ". Type 'help' for the commands.");
 
-        Thread receiver = new Thread(() -> receive(socket), "receiver");
+        String chosenRole = role;
+        Thread receiver = new Thread(() -> receive(socket, chosenRole), "receiver");
         receiver.setDaemon(true);
         receiver.start();
 
@@ -79,12 +80,18 @@ public final class ShopClient {
     }
 
     /// Runs on its own thread until the server is gone.
-    private static void receive(Socket socket) {
+    private static void receive(Socket socket, String role) {
         try {
             LineReader lines = new LineReader(socket.getInputStream());
             String line;
-            while ((line = lines.readLine()) != null)
+            while ((line = lines.readLine()) != null) {
                 show(line);
+                if (role.equals("provider") && line.equals("ERROR provider already connected")) {
+                    // this program cannot act as the provider, so it does not stay open as one
+                    System.out.println("Another provider is connected. Start this one again later.");
+                    System.exit(1);
+                }
+            }
             System.out.println("The server closed the connection.");
         } catch (IOException e) {
             System.out.println("Connection to the server lost: " + e.getMessage());

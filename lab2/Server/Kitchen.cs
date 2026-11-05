@@ -105,7 +105,6 @@ public sealed class Kitchen
 
     private void Prepare(Order order, int worker, int stillWaiting)
     {
-        order.Announced.Wait(); // READY must not come before ACCEPTED
         Log.Write(order.Client.Endpoint, $"order {order.Id} started by worker {worker}, {stillWaiting} orders waiting");
 
         // Preparing = waiting. Waiting on Cancelled instead of Thread.Sleep wakes up early if the client leaves.
@@ -127,7 +126,15 @@ public sealed class Kitchen
             return;
         }
 
-        Log.Write(order.Client.Endpoint, $"order {order.Id} ready");
-        order.Client.Send($"READY {order.Id}");
+        order.Announced.Wait(); // READY must not come before ACCEPTED
+        if (order.Client.Send($"READY {order.Id}"))
+        {
+            Log.Write(order.Client.Endpoint, $"order {order.Id} ready");
+            return;
+        }
+
+        // the client never got its order, so the products go back
+        int[] after = _stock.Return(order.Quantities);
+        Log.Write(order.Client.Endpoint, $"order {order.Id} ready but not delivered, client gone, back to stock: {Protocol.Items(order.Quantities, skipZero: true)}, stock {Protocol.Items(after)}");
     }
 }
