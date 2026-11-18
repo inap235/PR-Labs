@@ -1,0 +1,987 @@
+\documentclass[11pt,a4paper]{article}
+
+% Compile with pdfLaTeX (the Overleaf default). Upload the figures/ folder too.
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[a4paper,margin=2.3cm]{geometry}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+
+\graphicspath{{figures/}}
+\captionsetup{font=small,labelfont=bf}
+\setlength{\parskip}{5pt}
+\setlength{\parindent}{0pt}
+% Long names in typewriter type (RandomNumberGenerator, "proto":"lanchat/1") cannot be hyphenated:
+% let TeX stretch the spaces of such a line a little instead of letting the name stick out.
+\setlength{\emergencystretch}{3em}
+\renewcommand{\arraystretch}{1.15}
+
+\definecolor{wrong}{HTML}{B42828}
+\definecolor{notebg}{HTML}{F3F2EE}
+% Red marker for every value that still has to be filled in from your own results.
+% Search the file for TODO before handing the report in.
+\newcommand{\TODO}[1]{\textcolor{wrong}{\textbf{[TODO: #1]}}}
+% Include a figure if the file exists, otherwise show a visible placeholder.
+\newcommand{\fig}[2]{\IfFileExists{figures/#1}{\includegraphics[width=#2]{#1}}%
+  {\fbox{\parbox{0.9\linewidth}{\centering\vspace{2em}\TODO{figure \detokenize{#1} not generated yet}\vspace{2em}}}}}
+\newcommand{\question}[1]{\par\medskip\textbf{#1}\par}
+\newcommand{\notebox}[1]{\par\smallskip\noindent\colorbox{notebg}{\parbox{\dimexpr\linewidth-2\fboxsep}{\small #1}}\par\smallskip}
+% Code and program output: no extra space after a full stop or colon inside it.
+\newcommand{\code}[1]{{\frenchspacing\texttt{#1}}}
+
+% Footnotesize (not small as in lab 1): a log line or a datagram fits on one line.
+\lstset{basicstyle=\ttfamily\footnotesize,columns=fullflexible,keepspaces=true,
+        frame=single,rulecolor=\color{black!25},backgroundcolor=\color{notebg},
+        xleftmargin=3pt,xrightmargin=3pt,breaklines=true}
+
+\begin{document}
+
+% Title
+\begin{center}
+  {\small NETWORK PROGRAMMING \textperiodcentered{} UTM}\\[6pt]
+  {\LARGE\bfseries Laboratory Work 3: A Local Network Chat}\\[10pt]
+  \begin{tabular}{rl}
+    Authors: & Pancenco Ina, Rusnac Nichita \\
+    Group:   & FAF-242 \\
+    Teacher: & Ernest B\^{\i}tca \\
+    Date:    & November 2026
+  \end{tabular}
+\end{center}
+\vspace{4pt}\hrule\vspace{8pt}
+
+% Section 1
+\section{The task and the environment}
+
+The goal of this laboratory work is a chat for the local network built directly on UDP sockets.
+There is no server: every running copy of the program is a peer that both sends and receives. A
+message of the general channel reaches every peer with a single datagram, sent to a multicast group
+(or as a broadcast); a private message goes to one peer only and, in the last task, is encrypted
+with a key derived from a passphrase. The peers find each other without a server, notice who joins
+and who leaves, and never crash because of a datagram that is not a message of the chat.
+
+The chat is written in C\# as part of the same \code{Labs} program as the previous laboratory works
+(\code{Labs.exe lab3 chat -{}-name Ana -{}-port 5000}). For the bonus, a second implementation of the
+same protocol was written in Java, and the two talk to each other. The format of the datagrams is
+specified in \code{lab3/PROTOCOL.md}, so that a third program could join the same chat.
+
+Only the socket API is used: \code{Socket} with \code{SocketType.Dgram} in C\# and
+\code{DatagramSocket} in Java, with the equivalents of \code{socket}, \code{bind},
+\code{setsockopt}, \code{sendto}, \code{recvfrom}, \code{select} and \code{close}. No
+\code{UdpClient}, no library for messaging or discovery. The JSON of the datagrams is written and
+read with \code{System.Text.Json} in C\#; Java has no JSON in its standard library, so the Java peer
+has its own small reader and writer (\code{Json.java}, 210 lines).
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Component & Value \\
+\midrule
+Computer & laptop, Intel Core i7-13700H (14 cores, 20 logical processors), 32\,GB RAM \\
+Operating system & Windows 10 Home 22H2 (build 19045) \\
+Network & Wi-Fi (MediaTek Wi-Fi 6E MT7902), address 192.168.100.15/24 in a home network;
+  the computer also has two link-local virtual adapters (169.254.x.x) and the loopback adapter \\
+C\# & .NET 9 (SDK 9.0.304, runtime 9.0.8), Release build \\
+Java & JDK 26.0.1, compiled with \code{-{}-release 17}, so any JDK from 17 on runs it \\
+Tests and charts & Python 3.13, standard library only (charts: matplotlib) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+All the tests and measurements of this report ran on this one computer, with up to sixteen peers
+at the same time. The general channel still left the computer through the Wi-Fi adapter: the system
+sends a multicast or broadcast datagram on the network and gives a copy of it to every local socket
+of the group. What a single computer cannot show is a datagram that arrives from another computer;
+that is shown at the defense, as the assignment requires (Section~\ref{sec:two}).
+
+% Section 2
+\section{Design}
+
+\subsection{Two sockets per peer}
+
+The central decision follows from a property of shared ports. Several peers on one computer must
+receive the general channel, so they all bind the port of the chat; but a unicast datagram sent to a
+port that several sockets share reaches only one of them (Section~\ref{sec:task1}, question~2).
+One socket cannot do both jobs, so every peer has two:
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}lp{2.3cm}>{\raggedright\arraybackslash}p{4.9cm}X@{}}
+\toprule
+Socket & Bound to & Options & What it receives \\
+\midrule
+shared & \code{0.0.0.0:5000} & \code{SO\_REUSEADDR} before \code{bind}; joins the group &
+  the general channel: \code{hello}, \code{join}, \code{alive}, \code{bye}, \code{chat} \\
+own & \code{0.0.0.0:0} & \code{IP\_MULTICAST\_IF}, \code{IP\_MULTICAST\_TTL}\,=\,1, \code{SO\_BROADCAST} &
+  only what is for this peer: \code{here}, \code{taken}, \code{private}, \code{ack} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Port 0 asks the system for any free port, so the own socket has a port that no other peer uses,
+for example 56437. \textbf{Every datagram of a peer is sent from its own socket}, also the ones to
+the group. Its source address and port are therefore the address of the peer in the chat: the
+others learn it from any datagram, and send their answers and private messages there. No peer ever
+has to tell its address in the content of a message.
+
+\subsection{Threads}
+
+The C\# peer has two threads. The main thread reads the keyboard and sends the general and private
+messages. The network thread waits for both sockets at once with \code{Socket.Select}, which returns
+as soon as a datagram waits on either of them, or after 0.2\,s. It receives and handles every
+datagram, and on every pass also checks the timers: send \code{alive} every 5\,s, remove the peers
+not heard from for 15\,s, and send again the private messages without an acknowledgement.
+
+The data the two threads share is protected as in laboratory work~2: the table of the peers online,
+the private messages waiting for an acknowledgement, the state of the peer (joining, online,
+refused, left), the sending on the own socket, the log file and the console each have a lock. The
+table holds immutable records, which are replaced as a whole, so a reader never sees half a change.
+
+Messages from the network must appear while the user is typing. A class \code{ConsoleUi} reads the
+keyboard key by key and keeps the line being typed; when a message arrives, it erases that line,
+prints the message, and draws the line again below it. The user's typing is never interrupted and
+never mixed with a message. When the input is not a terminal (a pipe, as in the tests), it falls
+back to ordinary line reading.
+
+\subsection{The datagrams}
+
+A datagram is one JSON object in UTF-8. UDP keeps the boundaries of datagrams, so one datagram is
+always one complete message, with no delimiter and no length prefix. Every datagram carries the
+version of the protocol, its kind, the name of the sender and the \emph{id} of the running sender:
+8 random bytes, written as 16 hex digits, new at every start. A general message:
+
+\begin{lstlisting}
+{"proto":"lanchat/1","type":"chat","from":"Ana","id":"5f0c9a1e7b2d4c33","seq":4,"text":"hello everyone"}
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}llX@{}}
+\toprule
+Kind & Sent to & Meaning \\
+\midrule
+\code{hello} & general channel & a peer starts: ``I want to join with this name'' \\
+\code{here}  & the new peer & answer to \code{hello}: ``I am online'' \\
+\code{taken} & the new peer & answer to \code{hello}: ``this name is mine'' \\
+\code{join}  & general channel & one second after \code{hello} without \code{taken}: ``I have joined'' \\
+\code{alive} & general channel & every 5 seconds: ``I am still here'' \\
+\code{bye}   & general channel & \code{/quit}, end of the input, Ctrl+C \\
+\code{chat}  & general channel & a message for everybody (\code{seq}, \code{text}) \\
+\code{private} & the receiver's own socket & a private message (\code{seq}, \code{to}, and \code{text} or \code{nonce} and \code{data}) \\
+\code{ack}   & the sender's own socket & ``your private message with this \code{seq} arrived'' \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The receiver checks every field: the datagram must be valid UTF-8 and JSON, have
+\code{"proto":"lanchat/1"} and a known kind, a valid name (1 to 16 letters, digits, \code{\_} or
+\code{-}), a valid id, and the fields of its kind with valid values (a text of 1 to 500 characters,
+a sequence number of at least 1, a nonce of 12 bytes). A datagram longer than 4\,096 bytes is
+dropped before it is even parsed. The receive buffer has 65\,536 bytes, so that a datagram that is
+too long arrives whole and can be measured and dropped, instead of being silently cut.
+
+\subsection{The log}
+
+Every peer writes a log file with a line for every datagram that it sends, receives or drops: the
+time, what happened, the endpoint of the other side, the kind, the size and a note. Lines starting
+with \code{-{}-{}-{}-} record other events. The log of Ana in a session with Ion and Maria on port 5000:
+she joins, Ion and Maria join, the three send a general message each, Ana sends a private message
+to Ion, a test program sends a datagram that is not a message, and Ion leaves:
+
+\begin{lstlisting}
+00:23:18.191  sent  239.255.42.42:5000     hello       73 B
+00:23:18.204  recv  192.168.100.15:60685   hello       73 B  own datagram, not shown again
+00:23:19.196  sent  239.255.42.42:5000     join        72 B
+00:23:19.196  recv  192.168.100.15:60685   join        72 B  own datagram, not shown again
+00:23:19.340  recv  192.168.100.15:60686   hello       73 B
+00:23:19.343  sent  192.168.100.15:60686   here        72 B
+00:23:20.346  recv  192.168.100.15:60686   join        72 B
+00:23:20.503  recv  192.168.100.15:63791   hello       75 B
+00:23:20.505  sent  192.168.100.15:63791   here        72 B
+00:23:21.516  recv  192.168.100.15:63791   join        74 B
+00:23:21.528  sent  239.255.42.42:5000     chat       104 B
+00:23:21.529  recv  192.168.100.15:60685   chat       104 B  own datagram, not shown again
+00:23:21.538  recv  192.168.100.15:63791   chat        98 B
+00:23:21.542  recv  192.168.100.15:60686   chat       104 B
+00:23:21.545  sent  192.168.100.15:60686   private    119 B
+00:23:21.547  recv  192.168.100.15:60686   ack         79 B
+00:23:21.556  drop  192.168.100.15:63792   ?           24 B  not JSON
+00:23:22.170  recv  192.168.100.15:60686   bye         71 B
+\end{lstlisting}
+
+Ana's own socket is \code{192.168.100.15:60685}, Ion's \code{:60686} and Maria's \code{:63791}: all
+three run on this computer, and the source of every datagram tells who sent it.
+
+% Section 3
+\section{Task 1: The general channel}\label{sec:task1}
+
+The shared socket of every peer is bound to \code{0.0.0.0} and the port of the chat, after
+\code{SO\_REUSEADDR}, and joins the multicast group \code{239.255.42.42} on the network the chat
+uses. A line typed by the user is sent with one \code{sendto} from the own socket to
+\code{239.255.42.42:5000}, which is one datagram. The system sends it once on the Wi-Fi network and
+gives a copy to every socket of this computer that is bound to port 5000 and has joined the group;
+the network delivers it to the other computers whose sockets have joined it.
+
+The group address lies in \code{239.255.0.0/16}, the \emph{local scope} of IPv4 multicast
+(RFC~2365), meant for the network of one organisation. The time to live of our multicast datagrams
+is 1, so no router passes them to another network. By default the chat uses the adapter that has a
+default gateway, the real local network, and not one of the virtual adapters of the computer; the
+option \code{-{}-interface} chooses another one, and \code{lab3 networks} lists them.
+
+The output of Ion in the session of the log above (the first line, with the name of the Wi-Fi
+adapter, is left out):
+
+\begin{lstlisting}
+This peer: 192.168.100.15:60686. Private messages: not encrypted (no --passphrase).
+Log: D:\Second_year\PR-Labs\lab3\logs\tests\Ion-5000-2.log
+Joining as Ion...
+* You joined the chat as Ion. Online: Ana.
+* Maria joined the chat
+[general] Ana: hello everyone
+[general] Maria: hi Ana
+[general] Ion: hello from Ion
+[private] Ana: see you at five
+\end{lstlisting}
+
+The test \code{general channel} checks that a message typed in one of three peers is shown by all
+three, the author included, exactly once (it waits one more second for a copy that should not
+come), and that the author's log has exactly one \code{chat} datagram sent, to the group.
+
+\subsection{Answers to the questions of Task 1}
+
+\question{1. Why is the socket bound to all the addresses of the computer (0.0.0.0), and not to its
+IP address or to 127.0.0.1?}
+
+The address in \code{bind} is a filter on the \emph{destination} address of the datagrams the socket
+accepts. The datagrams of the general channel are not addressed to the IP address of the computer
+at all: their destination is \code{239.255.42.42}, or \code{192.168.100.255} with
+\code{-{}-broadcast}. \code{0.0.0.0} accepts every destination that arrives at this computer: the
+group, the broadcast address, and any address of its adapters. A socket bound to
+\code{127.0.0.1} only accepts datagrams sent to the loopback address, which never come from
+another computer: it would hear nothing of the chat. A socket bound to the computer's own address
+depends on the system. A small experiment on this computer bound one socket to each address, all to
+the same port, and sent three datagrams of each kind:
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lcccc}
+\toprule
+Sent to \textbackslash{} bound to & \code{0.0.0.0} (1st) & \code{0.0.0.0} (2nd) & \code{192.168.100.15} & \code{127.0.0.1} \\
+\midrule
+the group \code{239.255.42.42}     & 3/3 & 3/3 & 3/3 & 0/3 \\
+broadcast \code{192.168.100.255}   & 3/3 & 3/3 & 3/3 & 0/3 \\
+broadcast \code{255.255.255.255}   & 3/3 & 3/3 & 3/3 & 0/3 \\
+unicast \code{192.168.100.15}      & 0/3 & 0/3 & 3/3 & 0/3 \\
+unicast \code{127.0.0.1}           & 0/3 & 0/3 & 0/3 & 3/3 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Windows delivers multicast and broadcast datagrams also to a socket bound to the address of the
+adapter on which they arrive; Linux does not, because their destination is not that address.
+Even on Windows, a socket bound to the computer's address ties the program to one adapter and to
+an address that DHCP may change while the chat runs. \code{0.0.0.0} works on every system and with
+any address. The adapter is chosen elsewhere: when the socket joins the group
+(\code{IP\_ADD\_MEMBERSHIP} with the address of the adapter) and for sending
+(\code{IP\_MULTICAST\_IF}). The second one matters on this computer: a datagram sent to the group
+from a PowerShell socket without \code{IP\_MULTICAST\_IF} left through one of the virtual adapters
+and never reached the chat. The same bytes sent to a peer's own endpoint arrived and were dropped
+and logged, and the test program, which sets the option, reaches the group every time.
+
+\question{2. How can several peers on the same computer bind the same port? Which of them receive a
+message of the general channel?}
+
+Normally a second \code{bind} to a port in use fails with ``address already in use''. Every peer
+sets \code{SO\_REUSEADDR} on its shared socket before \code{bind} (in C\#
+\code{SocketOptionName.ReuseAddress}, together with \code{ExclusiveAddressUse = false}); the system
+then lets every socket that asked for it bind the same port. A multicast or broadcast datagram is
+delivered to \emph{all} of them: the system makes one copy for every socket bound to the port (and,
+for multicast, member of the group). The table above shows it: both \code{0.0.0.0} sockets got
+every multicast and broadcast datagram. So all the peers of one computer receive the general
+channel, each with its own copy.
+
+A unicast datagram, by contrast, is delivered to \emph{one} of the sockets only. With three sockets
+bound to \code{0.0.0.0:47556}, ten unicast datagrams all went to the socket bound first; the other
+two received nothing. Windows does not promise which one gets them. This is why nothing for one
+peer only is ever sent to the shared port, and why every peer has its own socket.
+
+\question{3. Your own message comes back to you. How does your chat recognise it?}
+
+The datagram goes to the group, and the shared socket of the author is a member of the group like
+any other, so the author receives its own message too. Every datagram carries the \emph{id} of its
+sender: 8 random bytes chosen when the program starts. The network thread compares the id of every
+datagram with its own; when they are equal, the datagram is its own and is not shown (the log says
+\code{own datagram, not shown again}). The author's message is shown once, at the moment it is
+sent, so the author sees it even if the echo is lost.
+
+The id is used rather than the name, because a second program may try to use the same name (Task~2),
+and rather than the source address, because it is the same in every language and does not depend on
+which address the system chose. Besides, every message is shown only once: the peer remembers the
+pair (id, sequence number) of the last 1\,000 messages and drops a copy, for example a message that
+arrives twice through two networks.
+
+\question{4. Why at most 500 characters? What would happen to a message of 100\,000 characters?}
+
+A message must fit in one datagram, and a datagram should fit in one Ethernet frame, whose payload
+for UDP is 1\,472 bytes (1\,500 bytes of MTU minus 20 bytes of IP header and 8 bytes of UDP header).
+A character takes 1 to 3 bytes in UTF-8, so 500 characters make 500 to 1\,500 bytes of text.
+Measured with the sender name ``Ana'' (Figure~\ref{fig:sizes}):
+
+\begin{center}
+\small
+\begin{tabular}{lcc}
+\toprule
+500 characters of & general message & private message, encrypted \\
+\midrule
+ASCII (1 byte per letter)                       & 590 bytes   & 819 bytes \\
+Romanian or Cyrillic (2 bytes per letter, as \u{a}) & 1\,090 bytes & 1\,487 bytes \\
+Chinese (3 bytes per character)                 & 1\,590 bytes & 2\,155 bytes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Ordinary messages are far below one frame; only the longest messages in non-Latin alphabets need
+two IP fragments, which a local network handles well. 500 characters is a limit at which a message
+is always one datagram of reasonable size.
+
+A message of 100\,000 characters would be at least 100\,000 bytes of text, more than the largest UDP
+datagram of IPv4 (65\,507 bytes of data, Section~\ref{sec:control}, question~3): \code{sendto}
+would fail with ``message too long''. Even a message just below that limit would be cut by IP into
+about 45 fragments; one lost fragment loses the whole datagram, and every fragment is a chance to
+lose it. To send it anyway, the program would have to cut it into numbered parts and put them
+together again at the receiver, which is a part of TCP built again. Our chat refuses a line of more
+than 500 characters before sending it (\code{* Too long: 612 characters, at most 500. Not sent.}),
+and drops any received datagram longer than 4\,096 bytes or with a longer text.
+
+\begin{figure}[H]
+  \centering
+  \fig{datagram_sizes.png}{\linewidth}
+  \caption{The size of every kind of datagram, and of the longest messages, against the payload of
+           one Ethernet frame (1\,472 bytes) and the limit above which the chat drops a datagram.}
+  \label{fig:sizes}
+\end{figure}
+
+% Section 4
+\section{Task 2: Who is online}
+
+Every peer keeps a table of the peers online: name, id, endpoint of the own socket, and the time it
+was last heard from. The protocol that fills it:
+
+\begin{lstlisting}
+new peer N                      the peers online (A, B)            the peer that has N's name
+ |-- hello  (to the group) -------->|                                  |
+ |<-- here  (A, to N's own port) ---|  at once                         |
+ |<-- here  (B, to N's own port) ---|                                  |
+ |<-- taken (to N's own port) ---------------------------------------- | if the name is used
+ |   ... waits 1 second; with taken: prints that the name is used, ends
+ |-- join   (to the group) -------->|  A and B add N: "* N joined the chat"
+ |-- alive  (to the group, every 5 s) ...
+ |-- bye    (to the group, on /quit) -->|  "* N left the chat"
+\end{lstlisting}
+
+The others add the new peer only when it says \code{join}, after the second in which the owner of
+its name could object. A peer that is refused therefore never appears in anybody's list. A
+\code{join} replaces an older peer with the same name, because that one is gone (killed and
+started again at once), or it would have answered \code{taken}; the test \code{restarted peer}
+checks that a private message then reaches the new process. Any datagram of a peer counts as a sign
+of life. An \code{alive} or a message from a peer that is not in the table adds it, if its name is
+free: its \code{join} was lost, or it joined while we were joining ourselves.
+
+\subsection{Answers to the questions of Task 2}
+
+\question{1. How does a new peer learn who is already online, and how long does it take?}
+
+It sends \code{hello} to the group. Every peer that is online answers at once with \code{here},
+sent to the source of the \code{hello}, which is the own socket of the new peer; the answer carries
+the name and id of the peer, and its source is the endpoint of that peer. The new peer waits one
+second, collecting the answers, and then knows who is online with names and endpoints
+(\code{* You joined the chat as Maria. Online: Ana, Ion.}); \code{/users} lists them:
+
+\begin{lstlisting}
+* 3 online:
+    Maria (you)            192.168.100.15:63791
+    Ana                    192.168.100.15:60685   last heard 0 s ago
+    Ion                    192.168.100.15:60686   last heard 0 s ago
+\end{lstlisting}
+
+Measured over ten joins with three peers online, the last answer arrived \textbf{21\,ms} after the
+\code{hello} (median, from the log of the new peer). Nearly all of that is the new process itself:
+it compiles its receiving code at the first datagram (the .NET just-in-time compiler), while a
+private message between two running peers is acknowledged in 0.6\,ms (Task~3). On a real Wi-Fi
+network, a few milliseconds more. The one-second wait is therefore generous; it is there for a
+slow peer or a busy network, and it is the time the owner of a name has to object.
+
+\question{2. The process of a peer is killed. How and when do the others notice? Why can they not
+notice it at once, as a TCP server notices a closed connection?}
+
+A killed process sends nothing more: no \code{bye}, no \code{alive}. The others notice the silence:
+the network thread removes a peer that has not been heard from for 15 seconds and prints
+\code{* Ion left the chat (not heard from for 15 s)}. Since the last \code{alive} was sent 0 to 5
+seconds before the kill, the others notice it \textbf{10 to 15 seconds} after the kill (plus up to
+0.2\,s until the next check). Eight kills at random moments were noticed after 10.2 to 14.3\,s:
+
+\begin{figure}[H]
+  \centering
+  \fig{killed_peer.png}{\linewidth}
+  \caption{Left: the 15 seconds start at the last datagram, not at the kill. Right: the measured
+           delay between the kill and the moment the other peer showed it, for eight kills.}
+\end{figure}
+
+A TCP server notices at once because there is a connection: when a process ends, its operating
+system closes its TCP sockets and sends a FIN (or a RST) to the other side, whose \code{recv} then
+returns 0 (or fails). UDP has no connection and no state shared by the two sides: closing a UDP
+socket sends nothing, and the peers never agreed that they are talking. Only the absence of
+datagrams can show that a peer is gone, and silence takes time to be sure about: 15 seconds are
+three missed \code{alive} messages, so one or two lost datagrams do not remove a peer that is still
+there. (A TCP server would not notice at once either if the network of the client disappeared;
+laboratory work~2 needed keepalive and took 16\,s for it.)
+
+\question{3. Two peers start with the same name at the same moment. What happens?}
+
+Both send \code{hello}, and both are still in their second of joining when they receive the
+other's \code{hello} with their own name. The rule is the same in both: \textbf{the smaller id keeps
+the name}. The peer with the greater id stops joining and prints
+\code{* Another peer is joining with the name Bob at this moment. Start again with another -{}-name.};
+the one with the smaller id answers \code{taken} to the other and joins normally. The peers that
+are already online answer both with \code{here}, but they add a peer only on its \code{join}, which
+only the winner sends, so they see one \code{* Bob joined the chat}. The test
+\code{same name same moment} starts two peers with the same name right after each other, three
+times: each time exactly one joined, and the observer saw it join once.
+
+If the \code{hello} of both were lost, both would join. Then, as soon as one of them hears the other
+(\code{join}, \code{alive} or a message with its own name and another id), the same rule applies:
+the one with the greater id says \code{bye} and ends, within 5 seconds at most.
+
+% Section 5
+\section{Task 3: Private messages}
+
+\code{/msg Ion see you at five} looks Ion up in the table and sends one \code{private} datagram from
+the own socket of the sender to the own socket of Ion:
+
+\begin{lstlisting}
+{"proto":"lanchat/1","type":"private","from":"Ana","id":"69478b4234df7e63","seq":2,"to":"Ion",
+ "text":"see you at five"}
+\end{lstlisting}
+
+The sender shows \code{[private to Ion] Ana: see you at five}, the receiver
+\code{[private] Ana: see you at five}. A name that is not online gets
+\code{* Nobody is not online. /users shows who is.}, and nothing is sent. The receiver drops a
+private message that arrives on its shared socket, or whose \code{to} is not its name.
+
+The receiver answers every private message with an \code{ack} carrying its sequence number. If the
+\code{ack} has not arrived after one second, the sender sends \emph{the same datagram} again, at
+most three times in all; then it tells the user
+\code{* Ion did not confirm your private message "see you at five": it was probably not delivered.}
+The receiver acknowledges a copy too, because a copy means that its first \code{ack} was lost, but
+shows it only once (it remembers the pairs id and sequence number).
+
+The test \code{private message} runs three peers and, on the same computer, a stranger: a plain
+socket bound to the port of the chat and joined to the group. After Ana's private message to Ion,
+Ion shows it, Maria does not, the stranger received nothing private, Ana's log has exactly one
+\code{private} datagram sent, to Ion's own endpoint, and one \code{ack} back.
+
+\subsection{Answers to the questions of Task 3}
+
+\question{1. Several peers on one computer share the port of the chat. How does a private message
+reach the right one?}
+
+It is not sent to the shared port. Every peer has a second socket, bound to port 0, for which the
+system chooses a free port that only this peer uses (in the session of Section~2.4, \code{60686}
+for Ion and \code{63791} for Maria, both on \code{192.168.100.15}). Every datagram of a peer leaves
+from that socket, so its source endpoint is the address of the peer, and the others keep it in their
+table. Ana's private message went to \code{192.168.100.15:60686}, where only Ion's socket is bound: the
+system delivers it to that socket and to no other. A unicast datagram to the shared port would have
+reached only the first of the sockets bound to it (Section~\ref{sec:task1}, question~2), which is
+Ion only by chance.
+
+\question{2. Why is a private message not sent to everybody, with the name of its receiver inside?}
+
+Because then everybody would receive it, and the privacy would depend on every other program
+politely ignoring a message that is not addressed to it. Any program bound to the port, a modified
+chat, or Wireshark on the same network would read it. The cost would also be everybody's: every
+peer would receive, parse and drop every private message, and on Wi-Fi a multicast datagram is sent
+at the lowest data rate and without the acknowledgements and retransmissions of the Wi-Fi layer that
+a unicast frame has, so it is slower and is lost more often. Sent to one endpoint, the message
+reaches only the receiver's computer and socket (on a switched network not even the network cards of
+the others see it), and the Wi-Fi layer retransmits it if a frame is lost.
+
+\question{3. What happens to a private message sent to a peer that left a second ago?}
+
+It depends on how the peer left. If it typed \code{/quit}, it sent \code{bye}, it is no longer in
+the table, and the message is not sent at all: \code{* Ion is not online}.
+
+If its process was killed, the others still have it in their table for up to 15 seconds, and the
+message is sent to its old endpoint. The datagram arrives at its computer, but no socket is bound to
+that port any more: the computer answers with an ICMP ``port unreachable'' message. \code{sendto}
+has already succeeded and knows nothing about it. On Windows, the next \code{recvfrom} on the
+sending socket fails with \code{WSAECONNRESET} (error 10054); our chat catches it, looks at the last
+datagram it sent to one peer, and tells the user at once (test \code{private to gone peer}):
+
+\begin{lstlisting}
+* Ion did not get your private message: nobody listens at 192.168.100.15:60003 any more.
+00:15:08.896  ----  ICMP port unreachable: nobody listens at 192.168.100.15:60003 any more, where the last private went
+\end{lstlisting}
+
+The error does not say which datagram it is about, so the chat can only guess that it is the last
+one. On Linux an unconnected UDP socket does not report it at all, and when the receiving computer is
+gone, or its firewall drops the datagram without an answer, nothing comes back either. Then the
+\code{ack} does not come, the message is sent three times, and the sender is told that it was
+probably not delivered. Either way the message is lost: UDP does not keep it for a peer that comes
+back.
+
+\question{4. UDP can lose a private message. How could the sender know that it arrived, and what
+would it do when it did not?}
+
+Only the receiver can tell, so it must answer: our chat implements this. The receiver sends an
+\code{ack} with the sequence number of every private message it accepts. The sender keeps the
+message until the \code{ack} arrives; after 1 second without it, it sends the same datagram again,
+at most three times in all, and then tells the user that the message was probably not delivered.
+The receiver acknowledges every copy but shows a message only once, recognising copies by the pair
+(id, sequence number). The time to wait must be longer than a round trip: measured on one computer,
+an \code{ack} came back after 0.6\,ms (median of 100, timed by a test program), so one second
+leaves a wide margin for a real network.
+
+Two limits remain. If the message arrived but every \code{ack} was lost, the sender wrongly reports
+it as not delivered: the sender can never be sure, only very likely right. And the messages are not
+ordered: a message sent again may be shown after a later one. TCP adds sequence numbers for the
+order and a window to send many messages before the first acknowledgement; one message at a time
+does not need them.
+
+% Section 6
+\section{Task 4: Secure private messages}
+
+All the peers of a chat are started with the same \code{-{}-passphrase}. Each derives the same key
+from it, without exchanging anything, and every private message is encrypted with it; the general
+channel stays in clear (\code{PrivateCipher.cs}):
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Step & What is used \\
+\midrule
+Key derivation & PBKDF2 with HMAC-SHA256, 600\,000 iterations, salt \code{"lanchat/1 port 5000"},
+  32 bytes of key \\
+Encryption & AES-256-GCM, with a 16-byte authentication tag \\
+Nonce & 12 random bytes from the system's cryptographic generator, new for every message \\
+Also authenticated & \code{lanchat/1|from|id|to|seq}, the header of the message, as associated data \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The encrypted private message has no \code{text}; \code{data} holds the ciphertext followed by the
+tag (seen by a test program that joined the chat without the passphrase):
+
+\begin{lstlisting}
+{"proto":"lanchat/1","type":"private","from":"Ana","id":"3e98cd0b4749bd55","seq":2,"to":"Eve",
+ "nonce":"DvQri0iAX/4B8nWI","data":"VTGb6epuIfsfnQAIcxidl..."}
+\end{lstlisting}
+
+A peer with another passphrase computes another key: the tag does not match, the message is dropped
+(\code{cannot be decrypted: another passphrase, or the datagram was changed on the way}), no
+\code{ack} is sent, and the sender is told that it was not confirmed (test
+\code{wrong passphrase}). A peer without a passphrase drops an encrypted message, and a peer with
+one drops a message that is not encrypted.
+
+\subsection{Answers to the questions of Task 4}
+
+\question{1. Why is the key derived with a key-derivation function, and not taken from the bytes of
+the passphrase?}
+
+First, AES-256 needs exactly 32 bytes, and a passphrase has any length: its bytes would have to be
+cut or padded in some arbitrary way. Second, and more important, a key should be 32 bytes that are
+completely unpredictable, while a passphrase chosen by people is a few words or a name with digits,
+which an attacker can guess. Whoever captures one encrypted datagram can test a guess offline: derive
+a key and check whether the tag of the datagram matches. With the bytes of the passphrase as the key,
+one guess costs one AES operation, and billions of guesses per second are possible.
+
+A key-derivation function makes every guess expensive on purpose. PBKDF2 runs HMAC-SHA256 600\,000
+times (the number OWASP recommends) to produce the key. Deriving our key took 71 to 75\,ms in the C\#
+peer and 0.3 to 0.5\,s in the Java one; a peer pays that once at start, an attacker for every single
+guess. The salt makes the result depend on more than the passphrase, so that a table computed in
+advance for common passphrases does not apply. Usually the salt is random and stored next to the
+key; here every peer must derive the same key without exchanging anything, so the salt is fixed by
+the protocol and the port of the chat. Two chats on different ports with the same passphrase still
+have different keys; a precomputed table for our protocol and port 5000 remains possible, which a
+strong passphrase makes useless.
+
+\question{2. Which algorithm encrypts your messages? Why must its nonce (or IV) never be used twice
+with the same key, and where do yours come from?}
+
+AES-256 in Galois/Counter Mode (GCM), an authenticated encryption: it encrypts and, in the same
+step, computes a 16-byte tag over the ciphertext and the associated data. GCM encrypts by counter
+mode: AES encrypts the nonce followed by a counter, and the result, the keystream, is XORed with the
+text. The keystream depends only on the key and the nonce. If two messages used the same nonce, the
+XOR of their ciphertexts would be the XOR of their texts, from which the texts can often be
+recovered, and the authentication key of GHASH could be computed, which allows forging tags for any
+message. One repeated nonce breaks both the secrecy and the integrity.
+
+Our nonces are 12 bytes, new for every message, from the cryptographic random generator of the
+system: \code{RandomNumberGenerator} in C\# and \code{SecureRandom} in Java. There are
+$2^{96}$ possible nonces; the chance of a repetition among $n$ messages is about $n^2/2^{97}$, which
+is negligible far beyond any chat (NIST allows $2^{32}$ messages per key with random nonces). A
+counter would not be safe here without more care, because all the peers share the key: two peers
+counting from 1 would use the same nonces. A message sent again because its \code{ack} was missing
+is the same datagram, with the same nonce, ciphertext and tag: the same text with the same nonce
+reveals nothing new.
+
+\question{3. Every member of the chat knows the passphrase. Who can read a private message between
+Ana and Ion? What would be needed so that only the two of them can?}
+
+Every member. The key comes only from the passphrase, so Maria has the same key as Ana and Ion. The
+datagram is sent to Ion's socket only, but on a Wi-Fi network Maria can capture it (a network
+card in monitor mode, Wireshark, or an access point she controls), and her copy of the key decrypts
+it. The encryption protects the private messages from those who do not know the passphrase, not from
+the other members.
+
+For only Ana and Ion to read it, each pair of peers needs a key of its own, which the others cannot
+compute: a key exchange. Each peer generates a key pair at start (for example X25519) and announces
+its public key; Ana and Ion each combine their own private key with the other's public key
+(Diffie-Hellman) and obtain the same secret, which nobody who only saw the public keys can compute;
+from it a key for the pair is derived (with HKDF) and used for their messages. The public keys must
+also be authenticated, otherwise Maria could announce her own key as Ion's and read everything in
+the middle: by comparing a fingerprint of the key in person, or with keys signed by an authority.
+This is how Signal or TLS work. Changing the key from time to time would also protect old messages
+if a key leaks later (forward secrecy).
+
+\question{4. Can somebody who does not know the passphrase change an encrypted message without the
+receiver noticing? What protects against it?}
+
+No. The GCM tag is computed with the key over the ciphertext and over the associated data, which is
+the header of the message: protocol, sender, id, receiver and sequence number. Changing any bit of
+any of them makes the receiver compute another tag, and without the key nobody can compute the right
+one (the chance of guessing a 16-byte tag is $2^{-128}$). The receiver then drops the message,
+showing nothing of it. The test \code{tampered message} captured a real encrypted datagram and sent
+changed versions of it to a peer with the passphrase:
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Change & What the receiver did \\
+\midrule
+one bit of the ciphertext flipped & dropped: cannot be decrypted \\
+another sequence number (header) & dropped: cannot be decrypted \\
+another nonce & dropped: cannot be decrypted \\
+\code{text} in clear instead of \code{data} & dropped: not encrypted, but this chat uses a passphrase \\
+the same datagram, unchanged, to a peer that never saw it & \textbf{accepted}, then dropped as a copy \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The last row shows what the tag does not protect against: a \emph{replay}. An unchanged datagram is
+authentic, so it is accepted. Our receiver remembers the (id, sequence number) of the messages it has
+shown, so a replay to the same running peer is dropped as a copy; but a peer started again with the
+same name has an empty memory and accepted it once. Protecting against that needs the receiver to
+be part of the key or of the authenticated data in a way that changes with every session (a key per
+pair and per session, as in question~3, or timestamps). The general channel and the control
+messages (\code{join}, \code{bye}, \code{taken}) are not authenticated at all: anybody on the
+network can send a general message in Ana's name, or tell a peer that its name is taken. The task
+asked for private messages to be secret; authenticating the rest would need a tag on every datagram.
+
+% Section 7
+\section{Control questions}\label{sec:control}
+
+\question{1. Which promises of TCP does UDP not make? Which of them did your chat rebuild, and which
+did it do without?}
+
+TCP promises a connection (both sides agree to talk, and each learns when the other closes), reliable
+delivery (acknowledgements and retransmission), the original order, no duplicates, flow control (the
+sender never overruns the receiver's buffer) and congestion control (it slows down when the network
+is loaded). UDP promises none of them: a datagram may be lost, duplicated or reordered, and nobody is
+told. It only keeps each datagram whole, which TCP does not.
+
+The chat rebuilt three of them, in a small form. Presence instead of a connection: \code{hello},
+\code{join}, \code{alive} every 5\,s, \code{bye}, and 15\,s of silence for a peer that is gone.
+Reliable delivery for private messages: \code{ack}, three attempts, one second apart. No duplicates:
+the (id, sequence number) of the last 1\,000 messages. It did without the order (two quick messages
+may be shown in another order, especially when one is sent again), without reliable delivery for
+the general channel (a lost multicast datagram is simply missing for that peer; acknowledgements
+from every peer would multiply the traffic), and without flow and congestion control (a chat sends
+a few small datagrams per minute).
+
+\question{2. Why is one sendto always one recvfrom with UDP, while one send is not one receive with
+TCP? Why did your chat need no delimiter and no length prefix?}
+
+UDP is a protocol of messages: every \code{sendto} becomes one datagram with its own UDP header,
+which contains its length, and the receiving system delivers it whole to one \code{recvfrom}, or not
+at all; it never joins two datagrams or delivers half of one. TCP is a stream of bytes: \code{send}
+only copies bytes into the sending buffer of the system, which cuts them into segments as the network
+allows (maximum segment size, window, Nagle's algorithm), and \code{recv} returns whatever bytes have
+arrived, part of a message or several messages. That is why laboratory work~2 needed the \code{\textbackslash n}
+at the end of every line and a class that collects bytes until a line is complete. In the chat, one
+datagram is one JSON object: its end is the end of the datagram, and its length is in the UDP header.
+
+\question{3. How big can a UDP datagram be? Why should it stay below about 1\,400 bytes on a real
+network?}
+
+The length field of the UDP header has 16 bits, so a UDP datagram, header included, has at most
+65\,535 bytes; inside an IPv4 packet, whose total length is also at most 65\,535 bytes, that leaves
+$65\,535 - 20 - 8 = 65\,507$ bytes of data. But one Ethernet or Wi-Fi frame carries at most 1\,500
+bytes of IP packet (the MTU), so 1\,472 bytes of UDP data. A larger datagram is cut by IP into
+fragments, which are reassembled only at the receiver. The whole datagram is lost if any fragment is
+lost, so the risk grows with every fragment; some firewalls and NAT devices drop fragments
+altogether; and on many paths the MTU is smaller than 1\,500 (1\,492 with PPPoE, less in a VPN
+tunnel), so a datagram of 1\,472 bytes may already be fragmented there. About 1\,400 bytes leaves a
+margin for such extra headers. The datagrams of our chat are 70 to 170 bytes for everything except
+long messages; 500 Latin characters make 590 bytes, and only the longest messages in non-Latin
+alphabets are over one frame (Figure~\ref{fig:sizes}).
+
+\question{4. What is the difference between broadcast and multicast? Which one does your chat use
+for the general channel, and what would change with the other one?}
+
+A broadcast goes to every host of the network segment: to \code{255.255.255.255} (limited broadcast)
+or to the broadcast address of the network, here \code{192.168.100.255}. Every network card accepts
+it, and the operating system of every computer must look at it, whether or not a program wants it;
+routers do not pass it; IPv6 has no broadcast. A multicast datagram goes to a group address
+(\code{224.0.0.0/4}). Only the hosts that have joined the group receive it: joining tells the network
+card to accept the Ethernet address of the group and, through IGMP, tells switches with IGMP snooping
+to send the group only to the ports that want it. With a larger time to live and multicast routing,
+it can even cross routers.
+
+Our chat uses \textbf{multicast} to \code{239.255.42.42} by default, and broadcast with
+\code{-{}-broadcast}. With broadcast, the sending socket needs \code{SO\_BROADCAST} (without it
+\code{sendto} fails), the destination is the broadcast address of the network, computed from the
+address and the mask of the adapter, and the receivers need not join anything. Every computer on the
+Wi-Fi network then receives every message of the chat, even those that do not run it. In exchange,
+broadcast works on networks whose switches handle IGMP badly. Because every shared socket is bound to
+\code{0.0.0.0} and has joined the group, it receives both, so broadcast and multicast peers can be in
+the same chat (test \code{broadcast mode}).
+
+\question{5. How many sockets does your chat use? To which address and port is each of them bound,
+and why?}
+
+Two per peer (Section~2.1). The shared socket is bound to \code{0.0.0.0} and the port of the chat,
+with \code{SO\_REUSEADDR}, and joins the group: the general channel goes to that port, which all the
+peers know in advance and share, also on one computer, and \code{0.0.0.0} accepts datagrams addressed
+to the group or to the broadcast address. The own socket is bound to \code{0.0.0.0} and port 0, a free
+port chosen by the system and used by this peer only: a unicast datagram to the shared port would
+reach only one of the peers of a computer, so private messages, answers and acknowledgements need a
+port of their own. The own socket sends every datagram, so its endpoint is the address of the peer,
+which the others learn from the source of what it sends. The Java peer has the same two sockets.
+
+\question{6. What does the checksum in the UDP header protect against? Why is it not enough against
+somebody who changes your datagrams on purpose?}
+
+The checksum is a 16-bit ones' complement sum over the UDP header, the data, and a pseudo-header with
+the source and destination addresses, the protocol and the length. The receiving system recomputes it
+and drops a datagram whose sum does not match. It protects against accidental changes: bits damaged
+in transit or in the memory of a device on the way, and a datagram delivered to the wrong address. It
+is weak even for that (some combinations of errors cancel out), and in IPv4 it is optional.
+
+Against an attacker it protects nothing, because it uses no secret: anybody who changes a datagram
+simply computes the checksum of the new content, with the same public algorithm, and the receiver
+accepts it. Protection against deliberate changes needs a value that only those who know a key can
+compute: a message authentication code, like the GCM tag of our private messages (Task~4,
+question~4).
+
+% Section 8
+\section{Bonus: a chat in two languages}
+
+The Java peer (\code{lab3/chat-java}, 1\,200 lines) implements the same protocol, from
+\code{PROTOCOL.md}, independently of the C\# code. It joins the same chat, finds the C\# peers and is
+found by them, shows their general messages, and exchanges encrypted private messages with them in
+both directions. The differences are those of the language:
+
+\begin{itemize}
+  \item \code{DatagramSocket} has no \code{select}, so the Java peer has a thread for each socket and
+        one for the timers; everything they share is protected by one lock.
+  \item Java has no JSON in its standard library, so \code{Json.java} writes and reads it.
+  \item Java cannot list the gateways of the adapters. To find the network, the Java peer
+        ``connects'' a UDP socket to an address outside the local network: that sends nothing, but
+        makes the system choose the route, and with it the local address of the default adapter.
+  \item \code{PBKDF2WithHmacSHA256} and \code{AES/GCM/NoPadding} give exactly the same key and
+        ciphertext format as \code{Rfc2898DeriveBytes.Pbkdf2} and \code{AesGcm}: the Java cipher puts
+        the tag after the ciphertext, and the C\# peer does the same.
+\end{itemize}
+
+The test \code{java peer} starts a C\# peer, a Java peer and another C\# peer with one passphrase
+containing Romanian letters, and checks general messages in both directions, private messages from
+C\# to Java and from Java to C\#, the acknowledgements, \code{/users} in Java, that a Java peer cannot
+take the name of a C\# one, and the \code{bye} of the Java peer. The test \code{java invalid
+datagrams} sends the sixteen invalid datagrams of Section~\ref{sec:tests} to the Java peer: it drops
+each one, with the same reason in its log as the C\# peer.
+
+\notebox{\textbf{A difference found by the tests.} With the passphrase given on the command line, the
+Java peer could not read the C\# peer's private messages. On Windows the Java launcher decodes the
+command line with the ANSI code page of the system (here Cp1251), which has no letter \u{a}, so it
+arrived as a question mark and gave another key; the C\# runtime reads the command line as Unicode.
+The environment is read as Unicode by both, so the Java peer also accepts the passphrase from the
+environment variable \code{LANCHAT\_PASSPHRASE}, and warns when a passphrase on the command line
+contains a question mark.}
+
+% Section 9
+\section{Tests}\label{sec:tests}
+
+The tests (\code{lab3/tests/test\_chat.py}) start real peers on this computer, each on a port of its
+own, type into them through their standard input, and check what they print and what their logs say.
+Where a test needs to send something the chat never sends, it uses plain Python sockets. All 19 tests
+passed:
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}lXc@{}}
+\toprule
+Test & What it checks & Result \\
+\midrule
+general channel & three peers; each message shown by all, the author too, once; one datagram to the group & passed \\
+join and users & the newcomer knows the two peers online at once; \code{/users} shows their endpoints & passed \\
+name taken & a second ``ana'' is told that the name is used and ends (exit code 3) & passed \\
+same name same moment & three times two peers with one name at once: exactly one joins & passed \\
+bye & \code{/quit}: the others show it 6\,ms later & passed \\
+killed peer & a killed peer is shown as gone 10 to 15\,s later & passed \\
+restarted peer & a peer killed and started again replaces its old self & passed \\
+private message & only the receiver gets it, not a peer or a stranger on the same computer; one \code{ack} & passed \\
+private errors & name not online, missing text, unknown command, 501 characters refused, 500 sent & passed \\
+private to gone peer & the ICMP ``port unreachable'' is reported to the user & passed \\
+invalid datagrams & 16 kinds of invalid datagrams dropped, each with its reason in the log; the chat goes on & passed \\
+unicode & names and messages in Romanian and Russian; names not case sensitive & passed \\
+encrypted on the wire & a stranger in the chat receives \code{nonce} and \code{data}, no text & passed \\
+wrong passphrase & a peer with another passphrase, or none, shows nothing; three attempts reach it & passed \\
+tampered message & changed datagrams dropped; an unchanged replay accepted once & passed \\
+broadcast mode & broadcast and multicast peers in one chat & passed \\
+loopback only & a chat on \code{127.0.0.1}, between the peers of one computer & passed \\
+java peer & C\# and Java peers in one encrypted chat (bonus) & passed \\
+java invalid datagrams & the Java peer drops the same invalid datagrams & passed \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The invalid datagrams were: 300 random bytes, a sentence, a JSON array, JSON without the protocol, an
+unknown kind, a message without text, a text of 501 characters, a name with a space, a message without
+a sequence number, datagrams of 5\,000 and 60\,000 bytes, a private message without text, a private
+message sent to the shared port, a private message for somebody else, an \code{ack} nobody waits for,
+and a \code{bye} from a peer that is not online.
+
+The interactive console was checked by hand: a peer ran in a terminal while another one sent it
+messages; the messages appeared above the prompt and the prompt stayed below them. Ctrl+C in that
+terminal sent \code{bye} before the program ended.
+
+\subsection{On two computers}\label{sec:two}
+
+\notebox{The assignment requires at least three peers on at least two computers. Everything in this
+report ran on one computer: the datagrams of the general channel went out through the Wi-Fi adapter,
+but no datagram came from another computer. Run Task~1 to 4 on two computers (the commands are in
+Appendix~\ref{app:run} and in \code{lab3/README.md}) and fill in the result here before the defense.}
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}p{5.6cm}X@{}}
+\toprule
+Network & \TODO{e.g. hotspot of a phone, 192.168.43.0/24} \\
+Computer 1 (C\# peers) & \TODO{address, peers} \\
+Computer 2 (C\# and Java peers) & \TODO{address, peers} \\
+General channel, private messages, encryption & \TODO{works / what did not} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% Section 10
+\section{Conclusion}
+
+UDP gives a program almost nothing but the delivery of separate messages, most of the time. That is
+enough for a chat without a server, because what the chat needs from the network is exactly what UDP
+does well: one datagram to the multicast group reaches every peer of the network at once, and one
+datagram to an endpoint reaches one peer. Everything else had to be built on top, and each part
+answers one of the questions of the assignment:
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}p{4.4cm}X@{}}
+\toprule
+Need & How the chat meets it \\
+\midrule
+everybody on one port & \code{SO\_REUSEADDR}, \code{0.0.0.0}, a multicast group with TTL 1 \\
+one peer only & a second socket on a port of its own, which sends everything \\
+recognise its own message & a random id in every datagram \\
+who is online & \code{hello} answered by \code{here}, \code{join}; measured: all answers within 21\,ms \\
+who has left & \code{bye}; or 15\,s of silence, noticed 10 to 15\,s after a kill \\
+unique names & \code{taken}; the smaller id wins a tie \\
+lost private messages & \code{ack}, three attempts, one second apart; copies shown once \\
+secret private messages & PBKDF2 (600\,000 iterations) and AES-256-GCM with random nonces \\
+changed messages & the GCM tag over the text and the header \\
+invalid datagrams & checked field by field, dropped and logged \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The tests also showed the limits honestly. A peer that is killed cannot be noticed at once, only
+after a silence that is long enough to be sure. A sender can never be completely sure that a message
+arrived. A passphrase shared by all the members protects the private messages from strangers, not
+from the other members, and authentication alone does not stop a replayed message. The Java peer,
+written from the protocol description, talked to the C\# one without changes to either, apart from
+the code page of the Java command line on Windows.
+
+% Appendices
+\appendix
+
+\section{Building and running}\label{app:run}
+
+The C\# chat needs the .NET 9 SDK, the Java peer a JDK from version 17, the tests Python 3. The
+commands run from the repository root, every peer in its own terminal.
+
+\begin{lstlisting}
+# build
+dotnet build Labs.csproj -c Release
+javac -d lab3/chat-java/out lab3/chat-java/src/lanchat/*.java
+
+# peers (same port, and same passphrase if any, for every peer of one chat)
+bin\Release\net9.0\Labs.exe lab3 chat --name Ana --port 5000
+bin\Release\net9.0\Labs.exe lab3 chat --name Ion --port 5000 --passphrase "our secret"
+bin\Release\net9.0\Labs.exe lab3 chat --name Maria --port 5000 --broadcast
+bin\Release\net9.0\Labs.exe lab3 chat --name Ion --port 5000 --interface 192.168.43.12
+bin\Release\net9.0\Labs.exe lab3 networks           # the addresses for --interface
+java -cp lab3/chat-java/out lanchat.LanChat --name Dan --port 5000 --passphrase "our secret"
+
+# in the chat
+hello everyone                 # to everybody
+/msg Ion see you at five       # to Ion only
+/users                         # who is online
+/quit                          # leave (also Ctrl+C)
+
+# tests and measurements
+python lab3/tests/test_chat.py
+python lab3/tests/test_chat.py measure      # writes lab3/results/measurements.json
+python lab3/report/make_charts.py           # the figures of this report
+\end{lstlisting}
+
+On two computers, the network must let multicast (or, with \code{-{}-broadcast}, broadcast) through;
+many Wi-Fi networks do not, and the hotspot of a phone does. The first time, Windows asks whether
+\code{Labs.exe} and \code{java.exe} may use the network: they must be allowed on private networks.
+
+\section{Measurements}\label{app:data}
+
+The measurements were made with \code{python lab3/tests/test\_chat.py measure} and saved in
+\code{lab3/results/measurements.json}, from which \code{make\_charts.py} draws the figures. Timings
+from the log files have steps of 1\,ms.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}Xl@{}}
+\toprule
+Measurement & Result \\
+\midrule
+last \code{here} after \code{hello}, three peers online (10 joins) & median 21\,ms, at most 24\,ms \\
+\code{private} to \code{ack}, timed by a test program (100 messages), C\# peer & median 0.62\,ms \\
+the same, Java peer & median 1.11\,ms \\
+\code{private} to \code{ack} in the logs, encrypted or not, C\# and Java (20 each) & median 0 or 1\,ms, at most 12\,ms \\
+key derivation, 600\,000 iterations, C\# / Java & 71 to 75\,ms / 0.3 to 0.5\,s \\
+killed peer noticed after (8 kills) & 10.2 to 14.3\,s \\
+\code{hello} / \code{join} / \code{here} / \code{ack} (name ``Ana'') & 73 / 72 / 72 / 79 bytes \\
+private message of 9 or 10 characters, not encrypted / encrypted & 113--115 / 167--168 bytes \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\end{document}

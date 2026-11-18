@@ -8,3 +8,6 @@ lab1/data/
 # Lab 2 saved stock and compiled Java client
 lab2/data/
 lab2/client-java/out/
+# Lab 3 chat logs and compiled Java peer
+lab3/logs/
+lab3/chat-java/out/
