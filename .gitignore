@@ -11,3 +11,6 @@ lab2/client-java/out/
 # Lab 3 chat logs and compiled Java peer
 lab3/logs/
 lab3/chat-java/out/
+# Lab 4 broker data (topics on disk) and logs
+lab4/data/
+lab4/logs/

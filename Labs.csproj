@@ -20,4 +20,9 @@
         <TieredCompilation>false</TieredCompilation>
     </PropertyGroup>
 
+    <!-- Lab 4 Part 2 (gRPC) is its own project in lab4/grpc: Part 1 must not use ASP.NET Core. -->
+    <PropertyGroup>
+        <DefaultItemExcludes>$(DefaultItemExcludes);lab4\grpc\**</DefaultItemExcludes>
+    </PropertyGroup>
+
 </Project>

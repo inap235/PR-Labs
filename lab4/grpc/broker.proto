@@ -1,0 +1,60 @@
+// The contract of the broker in Part 2, shared by the broker, the publisher and the subscriber:
+// the code of the server and of the client is generated from this file by Grpc.Tools at build time.
+syntax = "proto3";
+package broker;
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "Labs.Lab4.Grpc.Contract";
+
+service Broker {
+  // one request, one answer
+  rpc Publish (PublishRequest) returns (PublishReply);
+  // one request, a stream of answers
+  rpc Subscribe (SubscribeRequest) returns (stream Message);
+  // the topics, and their sizes
+  rpc ListTopics (ListTopicsRequest) returns (ListTopicsReply);
+}
+
+message Message {
+  int64 id = 1;
+  string topic = 2;
+  string sender = 3;
+  string body = 4;
+  google.protobuf.Timestamp time = 5;
+}
+
+// Task 3: the token is not here but in the metadata "authorization: Bearer <token>".
+message PublishRequest {
+  string topic = 1;
+  string sender = 2;
+  string body = 3;
+}
+
+// Sent at once, when the message is saved and queued, before any subscriber has it.
+message PublishReply {
+  int64 id = 1;
+  google.protobuf.Timestamp time = 2;
+}
+
+message SubscribeRequest {
+  string topic = 1;
+  // Without it: only the messages published from now on.
+  // With it: first the stored messages with a larger id (a subscriber that connects again after a restart).
+  optional int64 after_id = 2;
+}
+
+// The answer to Subscribe also has the header "last-id": the subscriber gets the messages after that id.
+
+message ListTopicsRequest {
+}
+
+message TopicInfo {
+  string name = 1;
+  int64 size = 2;      // number of messages
+  int64 last_id = 3;
+  int32 subscribers = 4;
+}
+
+message ListTopicsReply {
+  repeated TopicInfo topics = 1;
+}

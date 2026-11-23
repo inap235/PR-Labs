@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Laboratory Work 4, Part 2: the broker over gRPC. The broker runs on Kestrel (ASP.NET Core),
+         which is allowed in this part; Part 1 (in Labs.csproj) uses only HttpListener. -->
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net9.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <RootNamespace>Labs.Lab4.Grpc</RootNamespace>
+        <AssemblyName>BrokerGrpc</AssemblyName>
+        <InvariantGlobalization>true</InvariantGlobalization>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- The contract: Grpc.Tools generates the messages and both the server base class and the client. -->
+        <Protobuf Include="broker.proto" GrpcServices="Both" />
+        <!-- The same broker as in Part 1: store, queue, delivery, tokens, log, and the client programs. -->
+        <Compile Include="..\Core\**\*.cs" Link="Core\%(RecursiveDir)%(Filename)%(Extension)" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="Grpc.AspNetCore" Version="2.85.0" />
+      <PackageReference Include="Grpc.Net.Client" Version="2.85.0" />
+    </ItemGroup>
+
+</Project>
