@@ -156,6 +156,10 @@ public final class LanChat {
         // like the C# peer: several peers of one computer share the port, so SO_REUSEADDR before bind
         shared = new DatagramSocket(null);
         shared.setReuseAddress(true);
+        // macOS and Linux also want SO_REUSEPORT on every socket of the port (.NET sets both by
+        // itself); Windows has no such option, and SO_REUSEADDR alone is enough there
+        if (shared.supportedOptions().contains(StandardSocketOptions.SO_REUSEPORT))
+            shared.setOption(StandardSocketOptions.SO_REUSEPORT, true);
         shared.bind(new InetSocketAddress(port)); // 0.0.0.0:<port>
         shared.joinGroup(new InetSocketAddress(GROUP, 0), adapter);
 

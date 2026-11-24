@@ -176,8 +176,12 @@ class RawPeer:
         self.own = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.own.bind(("0.0.0.0", 0))
         self.own.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(IFACE))
+        # macOS refuses to send a datagram larger than the send buffer (9 KB by default)
+        self.own.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
         self.shared = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.shared.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):  # macOS, Linux: needed to share the port with the chat
+            self.shared.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self.shared.bind(("0.0.0.0", port))
         self.shared.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
                                socket.inet_aton(GROUP) + socket.inet_aton(IFACE))

@@ -81,10 +81,22 @@ public sealed class ConsoleUi
         if (!_interactive || !_reading)
             return;
         int length = Prompt.Length + _typed.Length;
-        int top = Math.Max(0, Console.CursorTop - (length - Console.CursorLeft) / Console.BufferWidth);
-        Console.SetCursorPosition(0, top);
-        Console.Write(new string(' ', length));
-        Console.SetCursorPosition(0, top);
+        if (OperatingSystem.IsWindows())
+        {
+            int top = Math.Max(0, Console.CursorTop - (length - Console.CursorLeft) / Console.BufferWidth);
+            Console.SetCursorPosition(0, top);
+            Console.Write(new string(' ', length));
+            Console.SetCursorPosition(0, top);
+            return;
+        }
+        // macOS / Linux: Console.CursorTop and CursorLeft ask the terminal through stdin and wait for
+        // the same lock as Console.ReadKey, so the network thread would hang here until a key is
+        // pressed (no alive sent, the others think we are gone). The cursor is known without asking:
+        // it is at the end of the typed line, so the line starts (length - 1) / width rows higher.
+        int width = Math.Max(1, Console.WindowWidth);
+        int rowsUp = (length - 1) / width;
+        // \r: column 0; ESC[nA: n rows up; ESC[J: erase from the cursor to the end of the screen
+        Console.Write(rowsUp > 0 ? $"\r\u001b[{rowsUp}A\u001b[J" : "\r\u001b[J");
     }
 
     private void DrawTyped()

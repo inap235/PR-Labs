@@ -99,8 +99,10 @@ Tests and charts & Python 3.13, standard library only (charts: matplotlib) \\
 \end{tabularx}
 \end{center}
 
-All the tests and measurements of this report ran on this one computer, with up to sixteen peers
-at the same time. The general channel still left the computer through the Wi-Fi adapter: the system
+All the measurements of this report ran on this one computer, with up to sixteen peers
+at the same time. The tests ran on it and, a second time, on a MacBook Pro (Apple M1 Pro, 10 cores,
+32\,GB RAM) with macOS 26.7.1, .NET 9 (SDK 9.0.320, runtime 9.0.22), OpenJDK 21.0.13 and
+Python 3.13.5, on Wi-Fi at 192.168.100.110/24 in the same home network (Section~\ref{sec:macos}). The general channel still left the computer through the Wi-Fi adapter: the system
 sends a multicast or broadcast datagram on the network and gives a copy of it to every local socket
 of the group. What a single computer cannot show is a datagram that arrives from another computer;
 that is shown at the defense, as the assignment requires (Section~\ref{sec:two}).
@@ -868,24 +870,126 @@ The interactive console was checked by hand: a peer ran in a terminal while anot
 messages; the messages appeared above the prompt and the prompt stayed below them. Ctrl+C in that
 terminal sent \code{bye} before the program ended.
 
+\subsection{On macOS}\label{sec:macos}
+
+The same 19 tests were run on the MacBook (Section~1). The first run found three problems that
+Windows does not have. After they were fixed, all 19 tests passed on macOS.
+
+\begin{enumerate}
+\item \textbf{The interactive console froze the network thread.} Before printing a message,
+  \code{ConsoleUi} read \code{Console.CursorTop} and \code{Console.CursorLeft} to erase the line being
+  typed. On macOS and Linux, .NET gets the cursor position by asking the terminal through standard
+  input, under the same lock that \code{Console.ReadKey} holds while it waits for a key. The network
+  thread therefore stopped at its first message (``Maria joined the chat'') until a key was pressed
+  in that terminal. A stopped peer sends no \code{alive}, so after 15\,s the others showed it as gone,
+  and when it woke up it showed them as gone and stopped again. The log of one peer shows the gap:
+\begin{lstlisting}
+11:18:54.156  recv  192.168.100.110:64268  join        74 B
+11:19:38.146  sent  239.255.42.42:5000     alive       73 B
+11:19:38.148  ----  Maria at 192.168.100.110:64268 not heard from for 15 s: gone
+11:19:38.149  recv  192.168.100.110:64268  alive       75 B     (7 times: queued for 44 s)
+\end{lstlisting}
+  The automatic tests did not see it, because their peers read a redirected input, which does not
+  use \code{ReadKey}. Now, outside Windows, the cursor position is computed instead of asked for:
+  the cursor is at the end of the typed line, so the line starts $\lfloor(\mathit{length}-1)/
+  \mathit{width}\rfloor$ rows higher, and it is erased with the escape sequences \code{ESC[nA} and
+  \code{ESC[J}. Two peers in pseudo-terminals for 26\,s confirmed it: with the old code the second
+  peer's \code{join} was the last line in the first peer's log; with the new one both sent an
+  \code{alive} every 5\,s.
+\item \textbf{The Java peer could not share the port.} On macOS (and Linux) several sockets may bind
+  \code{0.0.0.0:5000} only if every one of them sets \code{SO\_REUSEPORT}. .NET sets it together with
+  \code{SO\_REUSEADDR}, and Java does not, so a C\# peer started after a Java peer failed with
+  ``Address already in use''. The Java peer now also sets \code{SO\_REUSEPORT} where the system
+  supports it. The Python sockets of the tests needed the same change.
+\item \textbf{The test of a 60\,000-byte datagram could not send it.} macOS refuses to send a UDP
+  datagram larger than the socket's send buffer, 9\,216 bytes by default (\code{EMSGSIZE}). The
+  test now enlarges the buffer of its socket; the chat itself never sends more than about
+  2\,300 bytes.
+\end{enumerate}
+
+One difference remains, and it is expected: macOS does not report an ICMP ``port unreachable'' to
+an unconnected UDP socket. A private message to a peer that was killed a moment ago is therefore
+reported after its three attempts, as ``probably not delivered'', and not at once. The test
+``private to gone peer'' accepts both outcomes.
+
 \subsection{On two computers}\label{sec:two}
 
-\notebox{The assignment requires at least three peers on at least two computers. Everything in this
-report ran on one computer: the datagrams of the general channel went out through the Wi-Fi adapter,
-but no datagram came from another computer. Run Task~1 to 4 on two computers (the commands are in
-Appendix~\ref{app:run} and in \code{lab3/README.md}) and fill in the result here before the defense.}
+The chat was then run on the two computers of Section~1 at the same time, in the same home Wi-Fi
+network (192.168.100.0/24), on port 5000 with the multicast group 239.255.42.42. The peers of the
+Windows laptop were started by hand; on the MacBook, Daniel was started by hand and the other peers
+by a script that typed into them through their standard input. The datagrams below come from the log
+files of the MacBook (\code{lab3/logs/Daniel-16001.log} and \code{lab3/logs/twocomputers/}); what
+the Windows peers showed was checked on the screen of the Windows laptop.
 
 \begin{center}
 \small
-\begin{tabularx}{\linewidth}{@{}p{5.6cm}X@{}}
+\begin{tabularx}{\linewidth}{@{}p{3.6cm}X@{}}
 \toprule
-Network & \TODO{e.g. hotspot of a phone, 192.168.43.0/24} \\
-Computer 1 (C\# peers) & \TODO{address, peers} \\
-Computer 2 (C\# and Java peers) & \TODO{address, peers} \\
-General channel, private messages, encryption & \TODO{works / what did not} \\
+Network & home Wi-Fi, 192.168.100.0/24; multicast passes between the two computers \\
+Computer 1: Windows & 192.168.100.15; C\# peers Ana and Ion (no passphrase) and Maria
+  (passphrase ``our secret'') \\
+Computer 2: macOS & 192.168.100.110; C\# peers Daniel (by hand), Petru, Vlad (another
+  passphrase), Ilie (\code{-{}-broadcast}), Sorin (no passphrase), Ghita and others; Java peers
+  Elena, Dan and Nelu \\
+At most at once & 8 peers: 3 on Windows, 5 on macOS \\
 \bottomrule
 \end{tabularx}
 \end{center}
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}p{3.6cm}Xc@{}}
+\toprule
+Check & What happened & Result \\
+\midrule
+Task 1: group, Windows $\to$ Mac & each Windows peer's \code{alive} arrived every 5\,s for 8 minutes:
+  95 from each, no gap longer than 5.3\,s & works \\
+Task 1: group, Mac $\to$ Windows & the Windows peers answered the \code{hello} of every Mac peer (12 of 13 with all
+  three; Daniel's got only Maria's \code{here} and learned Ana and Ion from their \code{alive} a
+  second later), so the datagrams of the group reached them; the general messages, joins and departures of the
+  Mac peers were shown on the Windows screens & works \\
+Task 2: who is online & every new Mac peer printed \code{Online: Ana, Daniel, Ion, Maria} one second
+  after it started; \code{/users} showed Ana, Ion and Maria at 192.168.100.15 with their own ports & works \\
+Task 2: name taken & a Mac peer named ``ana'' got \code{taken} from Ana on Windows
+  (192.168.100.15:62151) and ended with exit code 3 & works \\
+Task 3: private, plain & Sorin (no passphrase) to Ana and Ion: one datagram each to the Windows
+  endpoint, \code{ack} after 7 and 14\,ms; shown on their screens & works \\
+Task 4: private, encrypted & Petru and Daniel to Maria: \code{ack} after 8 and 18\,ms; shown on Maria's screen & works \\
+Private, Windows $\to$ Mac & Maria to Daniel, encrypted: shown on the Mac as
+  \code{[private] Maria: Hi from windows}, \code{ack} sent back 12\,ms after it arrived & works \\
+Task 2: \code{/quit} on Windows & Ion's \code{bye} arrived and the Mac showed ``Ion left the chat'' at
+  once & works \\
+Task 4: wrong key & encrypted messages to Ana and Ion (no passphrase), a plain one to Maria, and one
+  from Vlad (another passphrase) to Maria: none confirmed after three attempts, as required & works \\
+Broadcast mode & Ilie (\code{-{}-broadcast}, 192.168.100.255) got \code{here} from all three
+  Windows peers; its general message was shown by the multicast peers of the Mac & works \\
+Bonus: Java peer & Elena, Dan and Nelu joined and got \code{here} from the Windows peers; their general
+  messages were shown by the C\# peers; their private messages were not confirmed (see below) & partly \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Across the network the last \code{here} from a Windows peer came 36 to 216\,ms after the
+\code{hello} (median 84\,ms over 13 joins), against at most 24\,ms on one computer
+(Appendix~\ref{app:data}): the answers now cross the Wi-Fi twice. That is still far inside the one
+second that a peer waits for them.
+
+\paragraph{Datagrams lost on the MacBook.} The log shows whether a datagram of the group left the
+computer: every peer gets back its own copy (``own datagram''). On the MacBook some sockets stopped
+getting it, and the other peers stopped getting their datagrams too, although \code{sendto}
+succeeded. Daniel lost 39 of its 84 \code{alive} messages, in runs of up to 77\,s; two peers started
+later lost 10 and 17 of 32. A socket opened at that moment worked at once, and the datagrams from
+Windows kept arriving without a gap. The 15\,s rule did what it is meant to do: the other peers
+showed ``Daniel left the chat (not heard from for 15 s)'', and when its next \code{alive} came
+through they showed ``Daniel joined the chat'' again, without anybody restarting anything. The same
+silent loss is the likely reason why the private messages of the Java peers were not confirmed:
+during that minute one of them did not reach even a C\# peer on the same MacBook, while the Java
+tests passed on a quiet port a few minutes later. The MacBook is a managed computer with the macOS
+firewall on and Symantec Endpoint Security installed as a network system extension, which inspects
+the traffic of every socket. That is the probable cause, but it could not be confirmed, because the
+extension cannot be switched off on that computer. At the defense, the peers of the MacBook should be started just before the
+demonstration, or the Windows laptop used with another computer.
+
 
 % Section 10
 \section{Conclusion}
@@ -944,6 +1048,9 @@ bin\Release\net9.0\Labs.exe lab3 chat --name Ion --port 5000 --interface 192.168
 bin\Release\net9.0\Labs.exe lab3 networks           # the addresses for --interface
 java -cp lab3/chat-java/out lanchat.LanChat --name Dan --port 5000 --passphrase "our secret"
 
+# macOS and Linux: forward slashes, and the program has no .exe
+./bin/Release/net9.0/Labs lab3 chat --name Ana --port 5000
+
 # in the chat
 hello everyone                 # to everybody
 /msg Ion see you at five       # to Ion only
@@ -959,6 +1066,9 @@ python lab3/report/make_charts.py           # the figures of this report
 On two computers, the network must let multicast (or, with \code{-{}-broadcast}, broadcast) through;
 many Wi-Fi networks do not, and the hotspot of a phone does. The first time, Windows asks whether
 \code{Labs.exe} and \code{java.exe} may use the network: they must be allowed on private networks.
+macOS asks whether the terminal may find devices on the local network (System Settings, Privacy
+\& Security, Local Network): it must be allowed, or the datagrams of the other computers do not
+arrive.
 
 \section{Measurements}\label{app:data}
 

@@ -107,6 +107,10 @@ Get-Content lab3\logs\Ana-12345.log -Wait
    for example `through 192.168.43.12 (Wi-Fi)`; if it shows another adapter (VirtualBox, WSL),
    add `--interface 192.168.43.12`.
 4. If multicast does not pass, start every peer with `--broadcast`.
+5. On a Mac, the commands use forward slashes and the program has no `.exe`:
+   `./bin/Release/net9.0/Labs lab3 chat --name Maria --port 5000`. The first time, macOS asks
+   whether the terminal may find devices on the local network: allow it (System Settings →
+   Privacy & Security → Local Network), otherwise the other computers' datagrams do not arrive.
 
 ## Showing the tasks
 
